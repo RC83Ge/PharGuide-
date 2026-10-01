@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SearchState, MedicationInfo } from './types';
-import { fetchMedicationInfo } from './services/geminiService';
+import { fetchMedicationInfo } from './services/medicationService';
 import { SearchBar } from './components/SearchBar';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal';
 import { SectionCard } from './components/SectionCard';

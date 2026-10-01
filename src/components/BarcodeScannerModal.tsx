@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Camera, RefreshCw, Upload, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { identifyMedicationFromBarcode, identifyMedicationFromImage } from '../services/geminiService';
+import { identifyMedicationFromBarcode, identifyMedicationFromImage } from '../services/medicationService';
 import { toast } from 'sonner';
 
 interface BarcodeScannerModalProps {
