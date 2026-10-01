@@ -1,0 +1,66 @@
+{
+  "short_name": "PharmaGuide",
+  "name": "PharmaGuide - Assistant Médicaments IA",
+  "description": "Consultez les indications et contre-indications de vos médicaments instantanément avec l'IA.",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "https://picsum.photos/seed/pharma1/720/1280",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Écran de recherche"
+    },
+    {
+      "src": "https://picsum.photos/seed/pharma2/1280/720",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Analyse détaillée"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Ma Pharmacie",
+      "short_name": "Pharmacie",
+      "description": "Accéder à ma liste de médicaments",
+      "url": "/?view=pharmacy",
+      "icons": [{ "src": "https://cdn-icons-png.flaticon.com/512/822/822168.png", "sizes": "192x192" }]
+    }
+  ],
+  "start_url": "./index.html",
+  "display": "standalone",
+  "theme_color": "#2563eb",
+  "background_color": "#ffffff",
+  "orientation": "portrait",
+  "categories": ["medical", "health", "lifestyle", "education"],
+  "lang": "fr-FR",
+  "dir": "ltr",
+  "prefer_related_applications": false,
+  "related_applications": [
+    {
+      "platform": "play",
+      "url": "https://play.google.com/store/apps/details?id=com.pharmaguide.app",
+      "id": "com.pharmaguide.app"
+    }
+  ]
+}
