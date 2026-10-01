@@ -246,6 +246,27 @@ const json = (body: unknown, status: number, headers: Record<string, string>) =>
     headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers }
   });
 
+// Diagnostic : ouvrir /api/gemini dans le navigateur indique si la clé est présente et acceptée par Google.
+// Ne renvoie jamais la clé elle-même.
+export async function GET() {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) {
+    return json({ ok: false, problem: "GEMINI_API_KEY est absente pour cet environnement Vercel. Ajoutez-la puis redéployez." }, 200, {});
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const errors: Record<string, string> = {};
+  for (const model of CANDIDATE_MODELS) {
+    try {
+      await withTimeout(ai.models.generateContent({ model, contents: "ping" }), TIMEOUT_PER_MODEL_MS);
+      return json({ ok: true, model, keyLength: apiKey.length }, 200, {});
+    } catch (err) {
+      errors[model] = String((err as Error)?.message || err).replaceAll(apiKey, "***").slice(0, 300);
+    }
+  }
+  return json({ ok: false, problem: "Google refuse toutes les requêtes avec cette clé.", keyLength: apiKey.length, errors }, 200, {});
+}
+
 export function OPTIONS(request: Request) {
   return new Response(null, { status: 204, headers: corsHeaders(request) });
 }
