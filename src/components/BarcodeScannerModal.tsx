@@ -61,16 +61,22 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
     setDetectedCode(decodedText);
     setScannerState('processing');
-    setStatusMessage(`Code détecté (${decodedText}). Identification du médicament avec l'IA...`);
+    setStatusMessage(`Code détecté (${decodedText}). Recherche du médicament...`);
 
     // Stopper le scanner avant la requête IA
     await stopScanner();
 
     try {
-      const medicationName = await identifyMedicationFromBarcode(decodedText);
+      const { name: medicationName, source } = await identifyMedicationFromBarcode(decodedText);
       if (!isComponentMounted.current) return;
 
-      toast.success(`Médicament identifié : ${medicationName}`);
+      if (source === 'bdpm') {
+        toast.success(`Médicament identifié : ${medicationName}`, { description: "Source : base officielle des médicaments (ANSM)" });
+      } else if (source === 'ai') {
+        toast.success(`Médicament probable : ${medicationName}`, { description: "Identifié par l'IA, vérifiez le nom sur la boîte." });
+      } else {
+        toast.warning("Code non reconnu, recherche avec le code brut.");
+      }
       onScanSuccess(medicationName);
       onClose();
     } catch (err: any) {

@@ -96,13 +96,18 @@ function downscaleImage(dataUrl: string, maxSide = 1280, quality = 0.85): Promis
   });
 }
 
-export const identifyMedicationFromBarcode = async (barcode: string): Promise<string> => {
+export interface BarcodeResult {
+  name: string;
+  source: "bdpm" | "ai" | "raw"; // base officielle, IA, ou code brut si rien n'a marché
+}
+
+export const identifyMedicationFromBarcode = async (barcode: string): Promise<BarcodeResult> => {
   try {
-    const { name } = await callApi<{ name: string }>({ action: "barcode", barcode });
-    return name || barcode;
+    const { name, source } = await callApi<BarcodeResult>({ action: "barcode", barcode });
+    return name ? { name, source } : { name: barcode, source: "raw" };
   } catch (error) {
     console.error("Erreur lors de la recherche du code-barres:", error);
-    return barcode;
+    return { name: barcode, source: "raw" };
   }
 };
 
@@ -112,6 +117,9 @@ export const identifyMedicationFromImage = async (imageDataUrl: string): Promise
   const { name } = await callApi<{ name: string }>({ action: "image", image });
   return name;
 };
+
+const offlineError = () =>
+  new Error("Vous êtes hors ligne. Seuls les médicaments de la base locale et les fiches déjà consultées sont disponibles.");
 
 export const fetchMedicationInfo = async (medicationName: string, userContext: string = ""): Promise<MedicationInfo> => {
   // 1. Base locale vérifiée et alias (0 ms)
@@ -134,10 +142,72 @@ export const fetchMedicationInfo = async (medicationName: string, userContext: s
   }
 
   // 4. Recherche en ligne via le serveur
+  if (!navigator.onLine) throw offlineError();
   const { data } = await callApi<{ data: unknown }>({ action: "info", name: medicationName, context: userContext });
   const result = sanitizeMedicationInfo(data, medicationName);
 
   setCachedMedication(medicationName, userContext, result);
   saveCachedSearchToDB(medicationName, result).catch(() => {});
   return result;
+};
+
+export interface InteractionItem {
+  medications: string[];
+  severity: "low" | "medium" | "high";
+  description: string;
+  advice: string;
+}
+
+export interface InteractionReport {
+  summary: string;
+  interactions: InteractionItem[];
+  profileWarnings: string[];
+  checkedAt: string;
+  medications: string[];
+}
+
+const INTERACTIONS_CACHE_KEY = "pharmaguide_interactions_report";
+
+const interactionsCacheId = (names: string[], context: string) =>
+  JSON.stringify([[...names].map(n => n.toLowerCase()).sort(), context.trim().toLowerCase()]);
+
+// Dernier rapport, s'il correspond toujours à la pharmacie et au profil actuels
+export const getCachedInteractionReport = (names: string[], context: string): InteractionReport | null => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(INTERACTIONS_CACHE_KEY) || "null");
+    if (cached?.id === interactionsCacheId(names, context)) return cached.report;
+  } catch {
+    // Ignore storage errors
+  }
+  return null;
+};
+
+export const checkPharmacyInteractions = async (names: string[], context: string): Promise<InteractionReport> => {
+  const cached = getCachedInteractionReport(names, context);
+  if (cached) return cached;
+  if (!navigator.onLine) throw new Error("Vous êtes hors ligne. La vérification des interactions nécessite une connexion.");
+
+  const { data } = await callApi<{ data: any }>({ action: "interactions", names, context });
+  const severities = ["low", "medium", "high"];
+  const report: InteractionReport = {
+    summary: data?.summary || "",
+    interactions: (Array.isArray(data?.interactions) ? data.interactions : [])
+      .filter((i: any) => i && Array.isArray(i.medications))
+      .map((i: any) => ({
+        medications: i.medications.map(String),
+        severity: severities.includes(i.severity) ? i.severity : "medium",
+        description: i.description || "",
+        advice: i.advice || ""
+      })),
+    profileWarnings: Array.isArray(data?.profileWarnings) ? data.profileWarnings.map(String) : [],
+    checkedAt: new Date().toISOString(),
+    medications: names
+  };
+
+  try {
+    localStorage.setItem(INTERACTIONS_CACHE_KEY, JSON.stringify({ id: interactionsCacheId(names, context), report }));
+  } catch {
+    // Ignore quota errors
+  }
+  return report;
 };

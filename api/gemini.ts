@@ -14,6 +14,7 @@ const CANDIDATE_MODELS = [
 const TIMEOUT_PER_MODEL_MS = 8500;
 const MAX_NAME_LENGTH = 120;
 const MAX_CONTEXT_LENGTH = 1500;
+const MAX_INTERACTION_MEDS = 30;
 const MAX_IMAGE_BASE64_LENGTH = 4_000_000; // Limite de corps des fonctions Vercel : 4,5 Mo
 
 // Origines autorisées en plus du site lui-même : l'appli Android (Capacitor) et le développement local
@@ -189,13 +190,151 @@ Points cruciaux à inclure :
   });
 }
 
-async function nameFromBarcode(ai: GoogleGenAI, barcode: string) {
+// --- Base de données publique des médicaments (BDPM, ANSM) ---
+// Les codes-barres des boîtes françaises contiennent le code CIP13 (EAN-13 ou DataMatrix GS1).
+// On le cherche dans la base officielle avant de demander à l'IA, qui peut se tromper.
+const BDPM_BASE_URL = "https://base-donnees-publique.medicaments.gouv.fr/download/file";
+const BDPM_TIMEOUT_MS = 15_000;
+const BDPM_CACHE_MS = 24 * 60 * 60 * 1000;
+
+interface BdpmIndex {
+  byCip13: Map<string, string>; // CIP13 -> CIS
+  byCip7: Map<string, string>;  // CIP7 -> CIS
+  names: Map<string, string>;   // CIS -> dénomination
+  loadedAt: number;
+}
+
+let bdpmIndex: Promise<BdpmIndex> | null = null;
+
+// Les fichiers BDPM ont longtemps été encodés en Windows-1252 ; on accepte les deux encodages
+function decodeBdpm(buffer: ArrayBuffer): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return new TextDecoder("windows-1252").decode(buffer);
+  }
+}
+
+async function fetchBdpmFile(name: string): Promise<string> {
+  const response = await withTimeout(fetch(`${BDPM_BASE_URL}/${name}`), BDPM_TIMEOUT_MS);
+  if (!response.ok) throw new Error(`BDPM ${name} : HTTP ${response.status}`);
+  return decodeBdpm(await response.arrayBuffer());
+}
+
+function parseBdpm(cisFile: string, cipFile: string): BdpmIndex {
+  const names = new Map<string, string>();
+  for (const line of cisFile.split(/\r?\n/)) {
+    const cols = line.split("\t");
+    if (cols.length > 1 && cols[0].trim()) names.set(cols[0].trim(), cols[1].trim());
+  }
+  const byCip13 = new Map<string, string>();
+  const byCip7 = new Map<string, string>();
+  for (const line of cipFile.split(/\r?\n/)) {
+    const cols = line.split("\t");
+    if (cols.length < 7) continue;
+    const cis = cols[0].trim();
+    if (cols[1].trim()) byCip7.set(cols[1].trim(), cis);
+    if (cols[6].trim()) byCip13.set(cols[6].trim(), cis);
+  }
+  return { byCip13, byCip7, names, loadedAt: Date.now() };
+}
+
+async function getBdpmIndex(): Promise<BdpmIndex> {
+  if (bdpmIndex) {
+    const index = await bdpmIndex.catch(() => null);
+    if (index && Date.now() - index.loadedAt < BDPM_CACHE_MS) return index;
+  }
+  bdpmIndex = Promise.all([fetchBdpmFile("CIS_bdpm.txt"), fetchBdpmFile("CIS_CIP_bdpm.txt")])
+    .then(([cis, cip]) => parseBdpm(cis, cip));
+  bdpmIndex.catch(() => { bdpmIndex = null; });
+  return bdpmIndex;
+}
+
+// Extrait le CIP13 (3400 + 9 chiffres) ou le CIP7 d'un code scanné, y compris d'un DataMatrix GS1 (01 + 0 + CIP13)
+function extractCip(code: string): { cip13?: string; cip7?: string } {
+  const digits = code.replace(/\D/g, "");
+  const cip13 = digits.match(/3400\d{9}/)?.[0];
+  if (cip13) return { cip13 };
+  if (/^\d{7}$/.test(digits)) return { cip7: digits };
+  return {};
+}
+
+// "DOLIPRANE 1000 mg, comprimé" -> "DOLIPRANE 1000 mg"
+const shortBdpmName = (denomination: string) => denomination.split(",")[0].trim();
+
+function lookupBdpm(index: BdpmIndex, code: string): string | null {
+  const { cip13, cip7 } = extractCip(code);
+  const cis = (cip13 && index.byCip13.get(cip13)) || (cip7 && index.byCip7.get(cip7));
+  const denomination = cis ? index.names.get(cis) : undefined;
+  return denomination ? shortBdpmName(denomination) : null;
+}
+
+async function nameFromOfficialDatabase(barcode: string): Promise<string | null> {
+  if (!extractCip(barcode).cip13 && !extractCip(barcode).cip7) return null;
+  try {
+    return lookupBdpm(await getBdpmIndex(), barcode);
+  } catch (err) {
+    console.warn("[PharmaGuide] BDPM indisponible, repli sur l'IA :", String(err).slice(0, 200));
+    return null;
+  }
+}
+
+async function nameFromAI(ai: GoogleGenAI, barcode: string) {
   return callWithFallback(async (model) => {
     const response = await ai.models.generateContent({
       model,
       contents: `Quel est le nom commercial du médicament français ou international associé au code-barres / CIP / EAN : "${barcode}" ? Réponds UNIQUEMENT par le nom du médicament (exemple : "Doliprane 1000mg", "Spasfon 80mg", "Dafalgan 1g") sans guillemets, sans politesse et sans texte d'accompagnement. Si tu n'as pas le nom exact, retourne uniquement le nom générique ou la molécule la plus probable.`
     });
     return stripQuotes(response.text || "") || barcode;
+  });
+}
+
+const interactionsSchema = {
+  type: Type.OBJECT,
+  properties: {
+    summary: { type: Type.STRING, description: "Synthèse en une ou deux phrases du niveau de risque global de cette association de médicaments" },
+    interactions: {
+      type: Type.ARRAY,
+      description: "Interactions cliniquement pertinentes entre deux médicaments de la liste (ou plus). Liste vide s'il n'y en a aucune.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          medications: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Noms des médicaments concernés, tels qu'écrits dans la liste" },
+          severity: { type: Type.STRING, enum: ["low", "medium", "high"], description: "high = association contre-indiquée ou dangereuse, medium = précaution d'emploi, low = à surveiller" },
+          description: { type: Type.STRING, description: "Nature et mécanisme du risque, en langage simple" },
+          advice: { type: Type.STRING, description: "Conduite à tenir concrète pour le patient" }
+        },
+        required: ["medications", "severity", "description", "advice"]
+      }
+    },
+    profileWarnings: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Risques liés au profil santé du patient (allergies, grossesse, maladies) pour un médicament de la liste. Liste vide si aucun."
+    }
+  },
+  required: ["summary", "interactions", "profileWarnings"]
+};
+
+async function checkInteractions(ai: GoogleGenAI, names: string[], context: string) {
+  const contents = `Voici la liste des médicaments pris par un patient :
+${names.map((n) => `- ${n}`).join("\n")}
+${context ? `\nProfil santé du patient : "${context}".\n` : ""}
+Analyse toutes les interactions médicamenteuses entre ces médicaments (y compris les doublons de principe actif, par exemple deux médicaments contenant du paracétamol), puis les risques liés au profil santé.
+Ne mentionne que des interactions réelles et documentées. Réponds UNIQUEMENT au format JSON strict selon le schéma fourni.`;
+
+  return callWithFallback(async (model) => {
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: interactionsSchema,
+        systemInstruction: SYSTEM_INSTRUCTION
+      }
+    });
+    if (!response.text) throw new Error("Aucune réponse générée par l'IA.");
+    return parseJson(response.text);
   });
 }
 
@@ -297,7 +436,17 @@ export async function POST(request: Request) {
       }
       case "barcode": {
         const barcode = requireString(body.barcode, "barcode", MAX_NAME_LENGTH);
-        return json({ name: await nameFromBarcode(ai, barcode) }, 200, cors);
+        const official = await nameFromOfficialDatabase(barcode);
+        if (official) return json({ name: official, source: "bdpm" }, 200, cors);
+        return json({ name: await nameFromAI(ai, barcode), source: "ai" }, 200, cors);
+      }
+      case "interactions": {
+        if (!Array.isArray(body.names) || body.names.length < 1 || body.names.length > MAX_INTERACTION_MEDS) {
+          throw new HttpError(400, `Indiquez entre 1 et ${MAX_INTERACTION_MEDS} médicaments.`);
+        }
+        const names = body.names.map((n, i) => requireString(n, `names[${i}]`, MAX_NAME_LENGTH));
+        const context = requireString(body.context, "context", MAX_CONTEXT_LENGTH, false);
+        return json({ data: await checkInteractions(ai, names, context) }, 200, cors);
       }
       case "image": {
         const image = requireString(body.image, "image", MAX_IMAGE_BASE64_LENGTH);

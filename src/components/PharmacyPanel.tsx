@@ -12,6 +12,7 @@ import {
   UserCircle
 } from 'lucide-react';
 import { MedicationInfo } from '../types';
+import { PharmacyInteractions } from './PharmacyInteractions';
 
 interface PharmacyPanelProps {
   medications: MedicationInfo[];
@@ -252,6 +253,12 @@ export const PharmacyPanel: React.FC<PharmacyPanelProps> = ({
             </div>
           )}
         </div>
+
+        {/* Interactions entre mes médicaments */}
+        <PharmacyInteractions
+          medicationNames={medications.map(m => m.name)}
+          userContext={userContext}
+        />
 
         <button 
           onClick={onClose}
