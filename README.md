@@ -14,70 +14,44 @@ Assistant intelligent et sécurisé pour la vérification des médicaments, leur
 
 - **Frontend** : React 19, TypeScript, Vite
 - **Styles** : Tailwind CSS v4, Lucide React
-- **IA** : Google GenAI SDK (`@google/genai`)
-- **Stockage** : IndexedDB (Local & Privé)
+- **IA** : Google Gemini (`@google/genai`), appelé uniquement depuis la fonction serveur `api/gemini.ts`
+- **Stockage** : IndexedDB (local et privé)
 - **Export** : jsPDF
+- **Android** : Capacitor
+
+## 🔐 Clé Gemini
+
+La clé Gemini reste **sur le serveur**. Le navigateur et l'appli Android envoient leurs requêtes à `POST /api/gemini`, une fonction Vercel qui ajoute la clé et interroge Gemini.
+
+- Ne jamais mettre la clé dans le code, dans un fichier commité, ni dans une variable préfixée par `VITE_` (elle serait intégrée au JavaScript public).
+- Ne jamais commiter `android/app/src/main/assets/public` : c'est une copie du build, régénérée par `npm run cap:sync`.
 
 ## 💻 Installation locale
 
-1. **Cloner le projet** :
-   ```bash
-   git clone <URL_DE_VOTRE_DEPOT>
-   cd pharmaguide
-   ```
+```bash
+npm install
+cp .env.example .env   # puis renseigner GEMINI_API_KEY
+npm run dev            # http://localhost:3000, l'API /api/gemini est servie par Vite
+```
 
-2. **Installer les dépendances** :
-   ```bash
-   npm install
-   ```
+Vérifications avant de pousser :
 
-3. **Configurer les variables d'environnement** :
-   Créer un fichier `.env` à la racine :
-   ```env
-   GEMINI_API_KEY=votre_cle_api_gemini
-   ```
-
-4. **Lancer le serveur de développement** :
-   ```bash
-   npm run dev
-   ```
-
-5. **Tester le build de production** :
-   ```bash
-   npm run build
-   ```
-
----
+```bash
+npm run lint    # vérification TypeScript
+npm run build
+```
 
 ## 🌐 Déploiement sur Vercel
 
-1. **Pousser le code sur GitHub** :
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit - PharmaGuide"
-   git branch -M main
-   git remote add origin https://github.com/<votre-nom-utilisateur>/<nom-du-repo>.git
-   git push -u origin main
-   ```
+1. Importer le dépôt sur [vercel.com](https://vercel.com) (preset **Vite**, build `npm run build`, sortie `dist`).
+2. Dans **Settings > Environment Variables**, ajouter `GEMINI_API_KEY` avec votre clé Gemini.
+3. Déployer. Le site et la fonction `/api/gemini` sont publiés ensemble.
 
-2. **Connecter Vercel à votre dépôt GitHub** :
-   - Rendez-vous sur [vercel.com](https://vercel.com) et connectez-vous.
-   - Cliquez sur **Add New...** > **Project**.
-   - Sélectionnez votre dépôt GitHub `pharmaguide`.
+## 📱 Build Android
 
-3. **Configurer le projet sur Vercel** :
-   - **Framework Preset** : `Vite` (détecté automatiquement).
-   - **Root Directory** : `./` (la racine).
-   - **Build Command** : `npm run build`
-   - **Output Directory** : `dist`
+L'appli Android embarque le site en local et doit savoir où trouver l'API :
 
-4. **Ajouter la variable d'environnement sur Vercel** :
-   Dans la section **Environment Variables** du projet Vercel :
-   - **Name** : `GEMINI_API_KEY`
-   - **Value** : *Votre clé API Gemini* (ex: `AQ.Ab8...`)
-   - Cliquez sur **Add**.
-
-5. **Déployer** :
-   - Cliquez sur **Deploy**.
-   - Vercel effectue le build et met en ligne l'application avec un domaine HTTPS personnalisé.
+```bash
+VITE_API_BASE_URL=https://votre-site.vercel.app npm run cap:sync
+npm run cap:open
+```
