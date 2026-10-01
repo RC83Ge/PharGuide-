@@ -1,79 +1,53 @@
-const CACHE_NAME = 'pharmaguide-v4';
-const ASSETS_TO_CACHE = [
-  './',
-  './index.html',
-  './manifest.json',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap',
-];
+// Service worker PharmaGuide : permet d'ouvrir l'appli et ses fiches déjà consultées sans connexion.
+// Changer CACHE_NAME à chaque modification de ce fichier pour vider l'ancien cache.
+const CACHE_NAME = 'pharmaguide-v5';
+const APP_SHELL = ['./', './index.html', './manifest.json', './favicon.svg', './icon-192.png'];
 
-// Installation du Service Worker et mise en cache des ressources de base
 self.addEventListener('install', (event) => {
   self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    })
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
 });
 
-// Activation et nettoyage des anciens caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    caches.keys()
+      .then((names) => Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n))))
+      .then(() => self.clients.claim())
   );
 });
 
-// Interception des requêtes réseau
-self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+const putInCache = (request, response) => {
+  if (response && response.ok && (response.type === 'basic' || response.type === 'cors')) {
+    const copy = response.clone();
+    caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+  }
+  return response;
+};
 
-  // Ne pas cacher les appels API vers Google Gemini
-  if (url.hostname.includes('generativelanguage.googleapis.com') || url.pathname.includes('/api/')) {
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+  // L'API et le service worker lui-même ne passent jamais par le cache
+  if (url.origin === self.location.origin && (url.pathname.startsWith('/api/') || url.pathname.endsWith('/sw.js'))) return;
+
+  const isFont = url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com';
+  const isSameOrigin = url.origin === self.location.origin;
+  if (!isSameOrigin && !isFont) return;
+
+  // Pages : réseau d'abord pour avoir la dernière version, cache si hors ligne
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => putInCache('./index.html', response))
+        .catch(async () => (await caches.match('./index.html')) || Response.error())
+    );
     return;
   }
 
-  // Stratégie Cache-First pour les assets statiques, Network-First pour le reste
-  const isStaticAsset = url.pathname.includes('/assets/') || 
-                        url.pathname.endsWith('.png') || 
-                        url.pathname.endsWith('.svg') || 
-                        url.pathname.endsWith('.json');
-
-  if (isStaticAsset) {
-    event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        return cachedResponse || fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseToCache = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          }
-          return networkResponse;
-        });
-      })
-    );
-  } else {
-    // Network-First pour index.html et les autres pages
-    event.respondWith(
-      fetch(event.request).then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          const responseToCache = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
-        }
-        return networkResponse;
-      }).catch(() => {
-        return caches.match(event.request) || caches.match('./index.html');
-      })
-    );
-  }
+  // Fichiers statiques (JS/CSS versionnés, images, polices) : cache d'abord
+  event.respondWith(
+    caches.match(request).then((cached) => cached || fetch(request).then((response) => putInCache(request, response)))
+  );
 });

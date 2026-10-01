@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Toaster, toast } from 'sonner';
-import { AlertTriangle, HelpCircle, History, Pill, RefreshCw } from 'lucide-react';
+import { AlertTriangle, HelpCircle, History, Pill, RefreshCw, WifiOff } from 'lucide-react';
 import { SearchState, MedicationInfo } from './types';
 import { fetchMedicationInfo } from './services/medicationService';
 import {
@@ -19,6 +19,7 @@ import { PharmacyPanel } from './components/PharmacyPanel';
 import { InfoPanel } from './components/InfoPanel';
 import { MedicationDetails } from './components/MedicationDetails';
 import { AppFooter } from './components/AppFooter';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
 
 const App: React.FC = () => {
   const [state, setState] = useState<SearchState>({
@@ -45,6 +46,7 @@ const App: React.FC = () => {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isDbReady, setIsDbReady] = useState(false);
+  const isOnline = useOnlineStatus();
 
   // Synchronisation et migration automatique avec IndexedDB
   useEffect(() => {
@@ -354,6 +356,13 @@ const App: React.FC = () => {
             />
           )}
         </header>
+
+        {!isOnline && (
+          <div className="bg-slate-800 text-white text-[11px] font-medium px-4 py-1.5 flex items-center justify-center gap-2">
+            <WifiOff className="w-3.5 h-3.5 shrink-0" />
+            Hors ligne : votre pharmacie et les fiches déjà consultées restent disponibles.
+          </div>
+        )}
 
         <main id="main-scroll" className="flex-grow w-full px-5 py-6 overflow-y-auto no-scrollbar pb-10">
           <div className={`transition-all duration-500 ${state.data ? 'mb-4' : 'mb-8 mt-4 text-center'}`}>
