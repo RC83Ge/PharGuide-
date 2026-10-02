@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { X, Camera, RefreshCw, Sparkles, AlertCircle, CheckCircle2, ScanText } from 'lucide-react';
-import { identifyMedicationFromBarcode, identifyMedicationFromImage } from '../services/medicationService';
+import { X, Camera, RefreshCw, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { identifyMedicationFromBarcode } from '../services/medicationService';
 import { extractCip13 } from '../utils/cip';
 import { toast } from 'sonner';
 
@@ -35,19 +35,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     Html5QrcodeSupportedFormats.CODE_128,
   ];
 
-  // Image actuelle de la caméra, pour lire le nom imprimé sur la boîte si le code est inconnu
-  const captureFrame = (): string | null => {
-    const video = document.querySelector<HTMLVideoElement>('#reader-camera-view video');
-    if (!video || !video.videoWidth) return null;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(video, 0, 0);
-    return canvas.toDataURL('image/jpeg', 0.9);
-  };
-
   const stopScanner = async () => {
     if (html5QrCodeRef.current) {
       try {
@@ -73,26 +60,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     onClose();
   };
 
-  // Demande à l'IA de lire le nom imprimé sur la boîte, puis le fait confirmer
-  const readNameFromBox = async (frame: string | null, reason: string) => {
-    if (!frame) {
-      setPending({ name: '', note: `${reason} Tapez le nom écrit sur la boîte.` });
-      setScannerState('confirm');
-      return;
-    }
-    setScannerState('processing');
-    setStatusMessage("Lecture du nom imprimé sur la boîte...");
-    try {
-      const name = await identifyMedicationFromImage(frame);
-      if (!isComponentMounted.current) return;
-      setPending({ name, note: `${reason} Nom lu sur la boîte par l'IA : vérifiez-le avant de lancer la recherche.` });
-    } catch {
-      if (!isComponentMounted.current) return;
-      setPending({ name: '', note: `${reason} Le nom n'a pas pu être lu sur l'image. Tapez le nom écrit sur la boîte.` });
-    }
-    setScannerState('confirm');
-  };
-
   const handleBarcodeDecoded = async (decodedText: string) => {
     if (isProcessingRef.current) return;
 
@@ -108,7 +75,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       navigator.vibrate([20, 50, 20]);
     }
 
-    const frame = captureFrame();
     setDetectedCode(code);
     setScannerState('processing');
     setStatusMessage("Recherche du médicament...");
@@ -125,7 +91,8 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         setPending({ name: result.name, note: "Trouvé dans un catalogue de produits : vérifiez le nom avant de lancer la recherche." });
         setScannerState('confirm');
       } else {
-        await readNameFromBox(frame, "Code-barres inconnu des bases de médicaments.");
+        setPending({ name: '', note: "Ce code-barres n'est dans aucune base de médicaments. Tapez le nom écrit sur la boîte." });
+        setScannerState('confirm');
       }
     } catch (err: any) {
       console.error("Erreur identification code-barres:", err);
@@ -133,15 +100,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       toast.error(err?.message || "Impossible d'identifier ce code.");
       startScanner();
     }
-  };
-
-  // Bouton manuel : lire le nom sur la boîte sans passer par le code-barres
-  const handleReadNameNow = async () => {
-    if (isProcessingRef.current) return;
-    isProcessingRef.current = true;
-    const frame = captureFrame();
-    await stopScanner();
-    await readNameFromBox(frame, "");
   };
 
   const startScanner = async () => {
@@ -301,7 +259,12 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
           {scannerState === 'confirm' && pending && (
             <div className="absolute inset-0 bg-slate-950/95 flex flex-col justify-center p-6 z-20 space-y-3">
               <h3 className="text-white font-bold text-base">Vérifiez le nom du médicament</h3>
-              {pending.note.trim() && <p className="text-slate-400 text-xs leading-relaxed">{pending.note.trim()}</p>}
+              {detectedCode && (
+                <div className="self-start px-3 py-1 bg-slate-800 border border-slate-700 rounded-lg text-emerald-400 font-mono text-xs flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Code scanné : {detectedCode}
+                </div>
+              )}
+              <p className="text-slate-400 text-xs leading-relaxed">{pending.note}</p>
               <form
                 className="space-y-3"
                 onSubmit={(e) => {
@@ -358,15 +321,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
         {/* Pied du scanner */}
         <div className="p-4 bg-slate-900 border-t border-slate-800 space-y-3">
-          {scannerState === 'scanning' && (
-            <button
-              onClick={handleReadNameNow}
-              className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700/80 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all"
-            >
-              <ScanText className="w-4 h-4 text-blue-400" />
-              Pas de code-barres ? Lire le nom sur la boîte
-            </button>
-          )}
           <p className="text-[11px] text-slate-500 text-center leading-snug">
             Codes français vérifiés dans la base officielle. Pour les autres boîtes, le nom trouvé vous est demandé en confirmation.
           </p>
