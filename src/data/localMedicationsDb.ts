@@ -1052,16 +1052,12 @@ export function findLocalMedication(rawQuery: string): MedicationInfo | null {
     }
   }
 
-  // 3. Clé directe dans LOCAL_MEDICATIONS_DB
+  // 3. Clé exacte dans LOCAL_MEDICATIONS_DB (nom complet ou un mot de la recherche).
+  // Pas de correspondance partielle : « codoliprane » ne doit jamais donner « doliprane ».
   for (const [key, data] of Object.entries(LOCAL_MEDICATIONS_DB)) {
     const cleanKey = key.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-    if (clean.includes(cleanKey) || cleanKey.includes(clean)) {
+    if (cleanKey === clean || tokens.includes(cleanKey)) {
       return data;
-    }
-    for (const token of tokens) {
-      if (cleanKey.includes(token) || token.includes(cleanKey)) {
-        return data;
-      }
     }
   }
 

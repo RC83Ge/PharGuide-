@@ -25,11 +25,15 @@ const EXTRA_ALLOWED_ORIGINS = [
 ];
 
 const SYSTEM_INSTRUCTION =
-  "Tu es un assistant pharmacien hospitalier et d'officine expert et rigoureux. Tu fournis des données pharmacologiques précises, fiables et à jour en français. Tu portes une attention extrême à la posologie maximale sur 24 heures et aux intervalles minimaux entre chaque prise pour prévenir les surdosages graves.";
+  "Tu es un assistant pharmacien hospitalier et d'officine expert et rigoureux. Tu fournis des données pharmacologiques précises, fiables et à jour en français. Tu portes une attention extrême à la posologie maximale sur 24 heures et aux intervalles minimaux entre chaque prise pour prévenir les surdosages graves. Tu ne devines jamais : si tu n'es pas certain d'un médicament ou d'une information, tu le dis au lieu d'inventer.";
 
 const medicationSchema = {
   type: Type.OBJECT,
   properties: {
+    recognized: {
+      type: Type.BOOLEAN,
+      description: "true UNIQUEMENT si tu es certain de quel médicament réel il s'agit. false si le nom est inconnu, inventé, ambigu ou trop mal orthographié pour être sûr : ne devine jamais."
+    },
     name: { type: Type.STRING, description: "Nom officiel ou commercial du médicament" },
     description: { type: Type.STRING, description: "Brève description pharmacologique" },
     indications: {
@@ -88,7 +92,7 @@ const medicationSchema = {
     },
     usageTips: { type: Type.STRING, description: "Conseil d'utilisation rapide (ex: prendre pendant les repas)" }
   },
-  required: ["name", "description", "indications", "maxDailyDosage", "contraindications", "interactions", "alternatives", "warningLevel", "usageTips"]
+  required: ["recognized", "name", "description", "indications", "maxDailyDosage", "contraindications", "interactions", "alternatives", "warningLevel", "usageTips"]
 };
 
 class HttpError extends Error {
@@ -155,9 +159,11 @@ Points cruciaux à inclure :
 1. Précise le DOSAGE MAXIMUM PAR JOUR (sur 24 heures consécutives) selon chaque indication thérapeutique (ex: adulte > 50kg pour douleurs/fièvre, enfant selon le poids, crise migraineuse, etc.).
 2. Pour chaque indication, précise la dose maximale par prise et l'intervalle minimal obligatoire entre deux prises consécutives.
 3. Fournis une mise en garde explicite sur les risques de toxicité et de surdosage si la dose journalière maximale est dépassée.
-4. Réponds UNIQUEMENT au format JSON strict selon le schéma fourni.`;
+4. Réponds UNIQUEMENT au format JSON strict selon le schéma fourni.
 
-  return callWithFallback(async (model) => {
+RÈGLE DE SÉCURITÉ ABSOLUE : ne devine jamais. Si tu n'es pas certain que "${name}" désigne un médicament réel précis (nom inconnu, inventé, ambigu, ou faute de frappe qui pourrait correspondre à plusieurs médicaments), réponds {"recognized": false} sans aucune autre information médicale.`;
+
+  const parsed = await callWithFallback(async (model) => {
     try {
       const response = await ai.models.generateContent({
         model,
@@ -178,13 +184,19 @@ Points cruciaux à inclure :
       console.warn(`[PharmaGuide] Tentative simplifiée sur ${model}...`);
       const retry = await ai.models.generateContent({
         model,
-        contents: `${contents}\n\nFormat attendu JSON valide avec clés: name, description, indications, maxDailyDosage, contraindications, interactions, alternatives, warningLevel, usageTips.`,
+        contents: `${contents}\n\nFormat attendu JSON valide avec clés: recognized, name, description, indications, maxDailyDosage, contraindications, interactions, alternatives, warningLevel, usageTips.`,
         config: { responseMimeType: "application/json", systemInstruction: SYSTEM_INSTRUCTION }
       });
       if (!retry.text) throw err;
       return parseJson(retry.text);
     }
   });
+
+  // Une réponse sans "recognized: true" explicite est traitée comme inconnue : jamais d'information au hasard
+  if ((parsed as { recognized?: unknown })?.recognized !== true) {
+    throw new HttpError(404, `Médicament inconnu : « ${name} » n'a pas pu être identifié avec certitude. Vérifiez l'orthographe ou demandez à votre pharmacien.`);
+  }
+  return parsed;
 }
 
 const interactionsSchema = {
@@ -219,7 +231,7 @@ async function checkInteractions(ai: GoogleGenAI, names: string[], context: stri
 ${names.map((n) => `- ${n}`).join("\n")}
 ${context ? `\nProfil santé du patient : "${context}".\n` : ""}
 Analyse toutes les interactions médicamenteuses entre ces médicaments (y compris les doublons de principe actif, par exemple deux médicaments contenant du paracétamol), puis les risques liés au profil santé.
-Ne mentionne que des interactions réelles et documentées. Réponds UNIQUEMENT au format JSON strict selon le schéma fourni.`;
+Ne mentionne que des interactions réelles et documentées. Si un nom de la liste ne correspond à aucun médicament que tu connais avec certitude, n'invente rien à son sujet et signale-le dans "summary". Réponds UNIQUEMENT au format JSON strict selon le schéma fourni.`;
 
   return callWithFallback(async (model) => {
     const response = await ai.models.generateContent({
