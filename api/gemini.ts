@@ -251,10 +251,15 @@ async function getBdpmIndex(): Promise<BdpmIndex> {
 }
 
 // Extrait le CIP13 (3400 + 9 chiffres) ou le CIP7 d'un code scanné, y compris d'un DataMatrix GS1 (01 + 0 + CIP13)
+function isValidEan13(code: string): boolean {
+  const sum = code.slice(0, 12).split("").reduce((acc, d, i) => acc + Number(d) * (i % 2 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === Number(code[12]);
+}
+
 function extractCip(code: string): { cip13?: string; cip7?: string } {
   const digits = code.replace(/\D/g, "");
   const cip13 = digits.match(/3400\d{9}/)?.[0];
-  if (cip13) return { cip13 };
+  if (cip13 && isValidEan13(cip13)) return { cip13 };
   if (/^\d{7}$/.test(digits)) return { cip7: digits };
   return {};
 }
@@ -269,24 +274,20 @@ function lookupBdpm(index: BdpmIndex, code: string): string | null {
   return denomination ? shortBdpmName(denomination) : null;
 }
 
-async function nameFromOfficialDatabase(barcode: string): Promise<string | null> {
-  if (!extractCip(barcode).cip13 && !extractCip(barcode).cip7) return null;
+// Pas de repli sur l'IA : deviner un médicament à partir d'un code-barres donne des noms faux
+async function nameFromOfficialDatabase(barcode: string): Promise<string> {
+  const { cip13, cip7 } = extractCip(barcode);
+  if (!cip13 && !cip7) throw new HttpError(422, "Ce code n'est pas un code de médicament (CIP).");
+  let index: BdpmIndex;
   try {
-    return lookupBdpm(await getBdpmIndex(), barcode);
+    index = await getBdpmIndex();
   } catch (err) {
-    console.warn("[PharmaGuide] BDPM indisponible, repli sur l'IA :", String(err).slice(0, 200));
-    return null;
+    console.error("[PharmaGuide] BDPM indisponible :", String(err).slice(0, 200));
+    throw new HttpError(503, "La base officielle des médicaments est momentanément injoignable. Réessayez ou tapez le nom.");
   }
-}
-
-async function nameFromAI(ai: GoogleGenAI, barcode: string) {
-  return callWithFallback(async (model) => {
-    const response = await ai.models.generateContent({
-      model,
-      contents: `Quel est le nom commercial du médicament français ou international associé au code-barres / CIP / EAN : "${barcode}" ? Réponds UNIQUEMENT par le nom du médicament (exemple : "Doliprane 1000mg", "Spasfon 80mg", "Dafalgan 1g") sans guillemets, sans politesse et sans texte d'accompagnement. Si tu n'as pas le nom exact, retourne uniquement le nom générique ou la molécule la plus probable.`
-    });
-    return stripQuotes(response.text || "") || barcode;
-  });
+  const name = lookupBdpm(index, barcode);
+  if (!name) throw new HttpError(404, "Ce code n'est pas dans la base officielle des médicaments. Tapez le nom du médicament.");
+  return name;
 }
 
 const interactionsSchema = {
@@ -388,9 +389,13 @@ const json = (body: unknown, status: number, headers: Record<string, string>) =>
 // Diagnostic : ouvrir /api/gemini dans le navigateur indique si la clé est présente et acceptée par Google.
 // Ne renvoie jamais la clé elle-même.
 export async function GET() {
+  const bdpm = await getBdpmIndex()
+    .then((index) => ({ ok: true, presentations: index.byCip13.size }))
+    .catch((err) => ({ ok: false, error: String((err as Error)?.message || err).slice(0, 200) }));
+
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
-    return json({ ok: false, problem: "GEMINI_API_KEY est absente pour cet environnement Vercel. Ajoutez-la puis redéployez." }, 200, {});
+    return json({ ok: false, problem: "GEMINI_API_KEY est absente pour cet environnement Vercel. Ajoutez-la puis redéployez.", bdpm }, 200, {});
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -398,12 +403,12 @@ export async function GET() {
   for (const model of CANDIDATE_MODELS) {
     try {
       await withTimeout(ai.models.generateContent({ model, contents: "ping" }), TIMEOUT_PER_MODEL_MS);
-      return json({ ok: true, model, keyLength: apiKey.length }, 200, {});
+      return json({ ok: true, model, keyLength: apiKey.length, bdpm }, 200, {});
     } catch (err) {
       errors[model] = String((err as Error)?.message || err).replaceAll(apiKey, "***").slice(0, 300);
     }
   }
-  return json({ ok: false, problem: "Google refuse toutes les requêtes avec cette clé.", keyLength: apiKey.length, errors }, 200, {});
+  return json({ ok: false, problem: "Google refuse toutes les requêtes avec cette clé.", keyLength: apiKey.length, errors, bdpm }, 200, {});
 }
 
 export function OPTIONS(request: Request) {
@@ -436,9 +441,7 @@ export async function POST(request: Request) {
       }
       case "barcode": {
         const barcode = requireString(body.barcode, "barcode", MAX_NAME_LENGTH);
-        const official = await nameFromOfficialDatabase(barcode);
-        if (official) return json({ name: official, source: "bdpm" }, 200, cors);
-        return json({ name: await nameFromAI(ai, barcode), source: "ai" }, 200, cors);
+        return json({ name: await nameFromOfficialDatabase(barcode), source: "bdpm" }, 200, cors);
       }
       case "interactions": {
         if (!Array.isArray(body.names) || body.names.length < 1 || body.names.length > MAX_INTERACTION_MEDS) {

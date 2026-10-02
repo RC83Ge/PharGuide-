@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { X, Camera, RefreshCw, Upload, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { identifyMedicationFromBarcode, identifyMedicationFromImage } from '../services/medicationService';
+import { X, Camera, RefreshCw, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { identifyMedicationFromBarcode } from '../services/medicationService';
+import { extractCip13 } from '../utils/cip';
 import { toast } from 'sonner';
 
 interface BarcodeScannerModalProps {
@@ -19,21 +20,14 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<string>('Initialisation de la caméra...');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [detectedCode, setDetectedCode] = useState<string | null>(null);
-  const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState<boolean>(false);
   
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isComponentMounted = useRef<boolean>(true);
 
-  // Formats supportés : EAN-13, EAN-8, Code 128, DataMatrix, QR Code, Code 39, etc.
+  // Seuls formats utilisés sur les boîtes de médicaments : les autres provoquaient de fausses lectures
   const formatsToSupport = [
     Html5QrcodeSupportedFormats.EAN_13,
-    Html5QrcodeSupportedFormats.EAN_8,
     Html5QrcodeSupportedFormats.DATA_MATRIX,
-    Html5QrcodeSupportedFormats.CODE_128,
-    Html5QrcodeSupportedFormats.QR_CODE,
-    Html5QrcodeSupportedFormats.UPC_A,
-    Html5QrcodeSupportedFormats.UPC_E,
   ];
 
   const stopScanner = async () => {
@@ -51,45 +45,59 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     }
   };
 
-  const handleBarcodeDecoded = async (decodedText: string) => {
-    // Si déjà en cours de traitement, éviter les doubles déclenchements
-    if (scannerState === 'processing') return;
+  // Des refs (et non l'état React) car le scanner appelle ce callback jusqu'à 15 fois par seconde
+  // avec la version de la fonction créée au démarrage : un état lu ici serait périmé.
+  const isProcessingRef = useRef<boolean>(false);
+  const lastReadRef = useRef<string | null>(null);
+  const lastInvalidNoticeRef = useRef<number>(0);
 
+  const handleBarcodeDecoded = async (decodedText: string) => {
+    if (isProcessingRef.current) return;
+
+    const cip13 = extractCip13(decodedText);
+    if (!cip13) {
+      if (Date.now() - lastInvalidNoticeRef.current > 4000) {
+        lastInvalidNoticeRef.current = Date.now();
+        toast.warning("Ce code n'est pas un code de médicament. Visez le code-barres ou le DataMatrix de la boîte.");
+      }
+      return;
+    }
+
+    // Exiger deux lectures identiques de suite pour écarter les lectures partielles
+    if (lastReadRef.current !== cip13) {
+      lastReadRef.current = cip13;
+      return;
+    }
+
+    isProcessingRef.current = true;
     if (navigator.vibrate) {
       navigator.vibrate([20, 50, 20]);
     }
 
-    setDetectedCode(decodedText);
+    setDetectedCode(cip13);
     setScannerState('processing');
-    setStatusMessage(`Code détecté (${decodedText}). Recherche du médicament...`);
-
-    // Stopper le scanner avant la requête IA
+    setStatusMessage("Recherche dans la base officielle des médicaments...");
     await stopScanner();
 
     try {
-      const { name: medicationName, source } = await identifyMedicationFromBarcode(decodedText);
+      const medicationName = await identifyMedicationFromBarcode(cip13);
       if (!isComponentMounted.current) return;
 
-      if (source === 'bdpm') {
-        toast.success(`Médicament identifié : ${medicationName}`, { description: "Source : base officielle des médicaments (ANSM)" });
-      } else if (source === 'ai') {
-        toast.success(`Médicament probable : ${medicationName}`, { description: "Identifié par l'IA, vérifiez le nom sur la boîte." });
-      } else {
-        toast.warning("Code non reconnu, recherche avec le code brut.");
-      }
+      toast.success(`Médicament identifié : ${medicationName}`, { description: "Source : base officielle des médicaments (ANSM)" });
       onScanSuccess(medicationName);
       onClose();
     } catch (err: any) {
       console.error("Erreur identification code-barres:", err);
       if (!isComponentMounted.current) return;
-      toast.error("Impossible d'identifier automatiquement le code. Utilisation du code comme terme de recherche.");
-      onScanSuccess(decodedText);
-      onClose();
+      toast.error(err?.message || "Impossible d'identifier ce code. Tapez le nom du médicament.");
+      startScanner();
     }
   };
 
   const startScanner = async () => {
     await stopScanner();
+    isProcessingRef.current = false;
+    lastReadRef.current = null;
     setErrorMessage(null);
     setDetectedCode(null);
     setScannerState('starting');
@@ -135,7 +143,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       console.error("Erreur démarrage caméra:", err);
       if (isComponentMounted.current) {
         setScannerState('error');
-        setErrorMessage("Impossible d'accéder à la caméra. Vérifiez les autorisations de votre navigateur ou utilisez l'import de photo.");
+        setErrorMessage("Impossible d'accéder à la caméra. Vérifiez les autorisations de votre navigateur.");
       }
     }
   };
@@ -159,49 +167,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     };
   }, [isOpen]);
 
-  // Analyse d'une photo importée ou capturée
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    await stopScanner();
-    setIsAnalyzingPhoto(true);
-    setScannerState('processing');
-    setStatusMessage("Analyse visuelle de la photo de la boîte par l'IA...");
-
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const dataUrl = e.target?.result as string;
-      if (!dataUrl) return;
-
-      try {
-        const name = await identifyMedicationFromImage(dataUrl);
-        if (!isComponentMounted.current) return;
-
-        if (name && name.trim().length > 0) {
-          toast.success(`Médicament reconnu : ${name}`);
-          onScanSuccess(name);
-          onClose();
-        } else {
-          toast.error("Aucun nom de médicament lisible sur la photo.");
-          setScannerState('scanning');
-          startScanner();
-        }
-      } catch (err: any) {
-        toast.error(err?.message || "Erreur lors de l'analyse de l'image.");
-        if (isComponentMounted.current) {
-          setScannerState('error');
-          setErrorMessage(err?.message || "Erreur lors de l'analyse visuelle.");
-        }
-      } finally {
-        if (isComponentMounted.current) {
-          setIsAnalyzingPhoto(false);
-        }
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
   if (!isOpen) return null;
 
   return (
@@ -219,7 +184,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 Scanner une boîte de médicament
               </h2>
               <p className="text-xs text-slate-400">
-                Code-barres, DataMatrix ou photo de la boîte
+                Code-barres ou DataMatrix de la boîte
               </p>
             </div>
           </div>
@@ -266,7 +231,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
           )}
 
           {/* Overlay de chargement / analyse */}
-          {(scannerState === 'processing' || isAnalyzingPhoto) && (
+          {scannerState === 'processing' && (
             <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-20">
               <div className="relative p-4 bg-blue-500/10 border border-blue-500/30 text-blue-400 rounded-full mb-4 animate-bounce">
                 <Sparkles className="w-8 h-8" />
@@ -301,40 +266,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
           )}
         </div>
 
-        {/* Barre d'actions & alternatives */}
+        {/* Pied du scanner */}
         <div className="p-4 bg-slate-900 border-t border-slate-800 space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            {/* Bouton import photo alternative */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileUpload}
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-            />
-
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={scannerState === 'processing'}
-              className="flex-1 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700/80 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-sm"
-            >
-              <Upload className="w-4 h-4 text-blue-400" />
-              Importer / Prendre photo de la boîte
-            </button>
-
-            {scannerState === 'error' && (
-              <button
-                onClick={startScanner}
-                className="py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all"
-              >
-                Recharger
-              </button>
-            )}
-          </div>
-
           <p className="text-[11px] text-slate-500 text-center leading-snug">
-            Soutient les codes CIP13, EAN-13, DataMatrix et l'analyse visuelle IA des boîtes.
+            Lit les codes CIP13, EAN-13 et DataMatrix des boîtes de médicaments.
           </p>
         </div>
 
