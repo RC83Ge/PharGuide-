@@ -32,7 +32,7 @@ const medicationSchema = {
   properties: {
     recognized: {
       type: Type.BOOLEAN,
-      description: "true UNIQUEMENT si tu es certain de quel médicament réel il s'agit. false si le nom est inconnu, inventé, ambigu ou trop mal orthographié pour être sûr : ne devine jamais."
+      description: "true si le nom désigne avec certitude un médicament réel existant (nom commercial ou DCI, de n'importe quel pays, avec ou sans dosage, majuscules et accents ignorés). false seulement si le nom est inconnu, inventé, ou pourrait correspondre à plusieurs médicaments différents : ne devine jamais."
     },
     name: { type: Type.STRING, description: "Nom officiel ou commercial du médicament" },
     description: { type: Type.STRING, description: "Brève description pharmacologique" },
@@ -161,7 +161,9 @@ Points cruciaux à inclure :
 3. Fournis une mise en garde explicite sur les risques de toxicité et de surdosage si la dose journalière maximale est dépassée.
 4. Réponds UNIQUEMENT au format JSON strict selon le schéma fourni.
 
-RÈGLE DE SÉCURITÉ ABSOLUE : ne devine jamais. Si tu n'es pas certain que "${name}" désigne un médicament réel précis (nom inconnu, inventé, ambigu, ou faute de frappe qui pourrait correspondre à plusieurs médicaments), réponds {"recognized": false} sans aucune autre information médicale.`;
+RÈGLE DE SÉCURITÉ ABSOLUE : ne devine jamais.
+- Si "${name}" est le nom exact (ou une simple variante de majuscules, accents, dosage ou forme) d'un médicament réel que tu connais, nom commercial ou DCI, français ou étranger (ex : Inderal, Doliprane, propranolol), réponds avec "recognized": true et les informations de CE médicament.
+- Si le nom est inconnu, inventé, ou qu'une faute de frappe pourrait correspondre à plusieurs médicaments, réponds {"recognized": false} sans aucune autre information médicale. Ne remplace jamais le nom demandé par un autre médicament qui lui ressemble.`;
 
   const parsed = await callWithFallback(async (model) => {
     try {
