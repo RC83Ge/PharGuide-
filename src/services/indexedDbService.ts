@@ -1,4 +1,5 @@
 import { MedicationInfo } from "../types";
+import { DoseEntry, pruneOldEntries } from "../utils/doseLog";
 
 const DB_NAME = "PharmaGuideDB";
 const DB_VERSION = 1;
@@ -422,4 +423,24 @@ export const importPharmacyBackupJSON = async (jsonString: string): Promise<{ su
       message: `Erreur d'importation : ${err?.message || "Fichier JSON non reconnu."}`
     };
   }
+};
+
+// ============================================================================
+// JOURNAL DES PRISES
+// ============================================================================
+
+const DOSE_LOG_KEY = "doseLog";
+
+export const getDoseLogFromDB = async (): Promise<DoseEntry[]> => {
+  const value = await getSettingFromDB<DoseEntry[] | string>(DOSE_LOG_KEY, []);
+  try {
+    const list = typeof value === "string" ? JSON.parse(value) : value;
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveDoseLogToDB = async (entries: DoseEntry[]): Promise<void> => {
+  await saveSettingToDB(DOSE_LOG_KEY, pruneOldEntries(entries));
 };

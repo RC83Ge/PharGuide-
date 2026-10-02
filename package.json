@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "tsc --noEmit --noUnusedLocals",
     "cap:sync": "vite build && npx cap sync",
-    "cap:open": "npx cap open android"
+    "cap:open": "npx cap open android",
+    "test": "node --test --experimental-strip-types --no-warnings 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",

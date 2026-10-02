@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { MedicationInfo } from '../types';
 import { AlertBadge } from './AlertBadge';
+import { DoseLogCard } from './DoseLogCard';
 import { Alternatives } from './Alternatives';
 import { MaxDosageCard } from './MaxDosageCard';
 import { SectionCard } from './SectionCard';
@@ -134,6 +135,7 @@ export const MedicationDetails: React.FC<MedicationDetailsProps> = ({
       {med.maxDailyDosage && (
         <MaxDosageCard dosageInfo={med.maxDailyDosage} className="animate-fade-in-up delay-150" />
       )}
+      <DoseLogCard med={med} className="animate-fade-in-up delay-150" />
       <SectionCard title="Contre-indications" items={med.contraindications} icon={Ban} variant="danger" className="animate-fade-in-up delay-200" />
       <SectionCard title="Interactions" items={med.interactions} icon={Activity} variant="warning" className="animate-fade-in-up delay-300" />
     </div>

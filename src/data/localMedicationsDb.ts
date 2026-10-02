@@ -1,4 +1,4 @@
-import { MedicationInfo } from "../types";
+import type { MedicationInfo } from "../types";
 
 export const LOCAL_MEDICATIONS_DB: Record<string, MedicationInfo> = {
   "dafalgan": {
