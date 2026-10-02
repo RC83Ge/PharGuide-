@@ -16,7 +16,7 @@
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/icon-maskable-512.png",
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "maskable"
@@ -44,7 +44,12 @@
       "short_name": "Pharmacie",
       "description": "Accéder à ma liste de médicaments",
       "url": "/?view=pharmacy",
-      "icons": [{ "src": "https://cdn-icons-png.flaticon.com/512/822/822168.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ],
   "start_url": "./index.html",
@@ -52,7 +57,12 @@
   "theme_color": "#2563eb",
   "background_color": "#ffffff",
   "orientation": "portrait",
-  "categories": ["medical", "health", "lifestyle", "education"],
+  "categories": [
+    "medical",
+    "health",
+    "lifestyle",
+    "education"
+  ],
   "lang": "fr-FR",
   "dir": "ltr",
   "prefer_related_applications": false,

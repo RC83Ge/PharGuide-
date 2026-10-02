@@ -1,6 +1,6 @@
 // Service worker PharmaGuide : permet d'ouvrir l'appli et ses fiches déjà consultées sans connexion.
 // Changer CACHE_NAME à chaque modification de ce fichier pour vider l'ancien cache.
-const CACHE_NAME = 'pharmaguide-v5';
+const CACHE_NAME = 'pharmaguide-v6';
 const APP_SHELL = ['./', './index.html', './manifest.json', './favicon.svg', './icon-192.png'];
 
 self.addEventListener('install', (event) => {

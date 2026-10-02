@@ -1,47 +1,25 @@
-import React from 'react';
+import React, { useId } from 'react';
 
 interface LogoProps {
   className?: string;
 }
 
+// Logo PharmaGuide : bouclier (sécurité) + gélule
 export const Logo: React.FC<LogoProps> = ({ className = "w-10 h-10" }) => {
+  const gradientId = useId();
   return (
-    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-label="PharmaGuide">
       <defs>
-        <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#3b82f6" />
-          <stop offset="100%" stopColor="#2563eb" />
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#3b82f6" />
+          <stop offset="1" stopColor="#1d4ed8" />
         </linearGradient>
-        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
-          <feComposite in="SourceGraphic" in2="blur" operator="over" />
-        </filter>
       </defs>
-      
-      {/* Outer Circle */}
-      <circle cx="50" cy="50" r="45" stroke="url(#logoGradient)" strokeWidth="2" opacity="0.2" />
-      
-      {/* Main Cross */}
-      <path 
-        d="M50 25V75M25 50H75" 
-        stroke="url(#logoGradient)" 
-        strokeWidth="12" 
-        strokeLinecap="round" 
-        filter="url(#glow)"
-      />
-      
-      {/* Search Lens Detail */}
-      <circle cx="65" cy="65" r="15" fill="white" stroke="#2563eb" strokeWidth="3" />
-      <path d="M75 75L85 85" stroke="#2563eb" strokeWidth="4" strokeLinecap="round" />
-      
-      {/* Inner Cross Detail */}
-      <path 
-        d="M50 35V65M35 50H65" 
-        stroke="white" 
-        strokeWidth="2" 
-        strokeLinecap="round" 
-        opacity="0.5"
-      />
+      <path d="M50 8 L84 21 V46 C84 69 69 84 50 92 C31 84 16 69 16 46 V21 Z" fill={`url(#${gradientId})`} />
+      <g transform="rotate(-40 50 49)">
+        <rect x="29" y="40" width="42" height="18" rx="9" fill="#ffffff" />
+        <path d="M50 40 H62 A9 9 0 0 1 62 58 H50 Z" fill="#93c5fd" />
+      </g>
     </svg>
   );
 };
