@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Loader2, Mic, MicOff, Camera } from 'lucide-react';
+import { Search, Loader2, Mic, MicOff } from 'lucide-react';
 import { COMMON_MEDICATIONS } from '../data/commonMedications';
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
   isLoading: boolean;
   externalQuery?: string;
-  onOpenScanner?: () => void;
 }
 
 // Déclaration pour TypeScript car l'API SpeechRecognition n'est pas standard partout
@@ -17,7 +16,7 @@ declare global {
   }
 }
 
-export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, externalQuery, onOpenScanner }) => {
+export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, externalQuery }) => {
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -131,7 +130,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, exter
         
         <input
           type="text"
-          className={`block w-full pl-10 ${onOpenScanner ? 'pr-[8rem]' : 'pr-[5.5rem]'} py-3.5 bg-white border rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 shadow-sm transition-all duration-300 text-base
+          className={`block w-full pl-10 pr-[5.5rem] py-3.5 bg-white border rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 shadow-sm transition-all duration-300 text-base
             ${isListening ? 'border-red-400 ring-2 ring-red-500/20' : 'border-slate-200 focus:border-blue-500'}
             ${showSuggestions && suggestions.length > 0 ? 'rounded-b-none border-b-0' : ''}
           `}
@@ -144,19 +143,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, exter
         />
 
         <div className="absolute right-1.5 top-1.5 bottom-1.5 flex gap-1">
-          {/* Bouton Scanner Caméra */}
-          {onOpenScanner && (
-            <button
-              type="button"
-              onClick={onOpenScanner}
-              disabled={isLoading}
-              className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-300 flex items-center justify-center active:scale-95"
-              title="Scanner un code-barres ou une boîte"
-            >
-              <Camera className="w-5 h-5" />
-            </button>
-          )}
-
           {/* Bouton Micro */}
           {isSupported && (
             <button

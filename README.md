@@ -4,8 +4,9 @@ Assistant intelligent et sécurisé pour la vérification des médicaments, leur
 
 ## 🚀 Fonctionnalités
 
-- **Recherche instantanée** : Base de données locale de secours + recherche enrichie en ligne via Google Gemini AI.
-- **Scanner de code-barres / QR-Code** : Identification rapide par la caméra.
+- **Recherche instantanée** : au clavier ou à la voix, base de données locale de secours + recherche enrichie en ligne via Google Gemini AI.
+- **Interactions** : vérification des interactions entre tous les médicaments de la pharmacie.
+- **Hors ligne** : la pharmacie et les fiches déjà consultées restent disponibles sans connexion.
 - **Ma Pharmacie locale** : Suivi des traitements quotidiens et des médicaments **en réserve / si besoin** avec persistance IndexedDB.
 - **Journal des prises** : Noter chaque prise et voir le total sur 24 h glissantes, avec une alerte quand la dose maximale approche ou est dépassée.
 - **Bilan médical imprimable** : Génération d'un rapport PDF et TXT récapitulatif pour les consultations médicales.

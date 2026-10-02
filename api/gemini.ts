@@ -15,7 +15,6 @@ const TIMEOUT_PER_MODEL_MS = 8500;
 const MAX_NAME_LENGTH = 120;
 const MAX_CONTEXT_LENGTH = 1500;
 const MAX_INTERACTION_MEDS = 30;
-const MAX_IMAGE_BASE64_LENGTH = 4_000_000; // Limite de corps des fonctions Vercel : 4,5 Mo
 
 // Origines autorisées en plus du site lui-même : l'appli Android (Capacitor) et le développement local
 const EXTRA_ALLOWED_ORIGINS = [
@@ -138,8 +137,6 @@ async function callWithFallback<T>(operation: (model: string) => Promise<T>): Pr
   throw new HttpError(503, "Les serveurs de recherche connaissent actuellement une forte affluence. Veuillez réessayer dans quelques secondes.");
 }
 
-const stripQuotes = (text: string) => text.trim().replace(/^["']|["']$/g, "");
-
 function parseJson(text: string): unknown {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   const jsonStr = (jsonMatch ? jsonMatch[0] : text).replace(/```json\n?|```/g, "").trim();
@@ -188,106 +185,6 @@ Points cruciaux à inclure :
       return parseJson(retry.text);
     }
   });
-}
-
-// --- Base de données publique des médicaments (BDPM, ANSM) ---
-// Les codes-barres des boîtes françaises contiennent le code CIP13 (EAN-13 ou DataMatrix GS1).
-// On le cherche dans la base officielle avant de demander à l'IA, qui peut se tromper.
-const BDPM_BASE_URL = "https://base-donnees-publique.medicaments.gouv.fr/download/file";
-const BDPM_TIMEOUT_MS = 15_000;
-const BDPM_CACHE_MS = 24 * 60 * 60 * 1000;
-
-interface BdpmIndex {
-  byCip13: Map<string, string>; // CIP13 -> CIS
-  byCip7: Map<string, string>;  // CIP7 -> CIS
-  names: Map<string, string>;   // CIS -> dénomination
-  loadedAt: number;
-}
-
-let bdpmIndex: Promise<BdpmIndex> | null = null;
-
-// Les fichiers BDPM ont longtemps été encodés en Windows-1252 ; on accepte les deux encodages
-function decodeBdpm(buffer: ArrayBuffer): string {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-  } catch {
-    return new TextDecoder("windows-1252").decode(buffer);
-  }
-}
-
-async function fetchBdpmFile(name: string): Promise<string> {
-  const response = await withTimeout(fetch(`${BDPM_BASE_URL}/${name}`), BDPM_TIMEOUT_MS);
-  if (!response.ok) throw new Error(`BDPM ${name} : HTTP ${response.status}`);
-  return decodeBdpm(await response.arrayBuffer());
-}
-
-function parseBdpm(cisFile: string, cipFile: string): BdpmIndex {
-  const names = new Map<string, string>();
-  for (const line of cisFile.split(/\r?\n/)) {
-    const cols = line.split("\t");
-    if (cols.length > 1 && cols[0].trim()) names.set(cols[0].trim(), cols[1].trim());
-  }
-  const byCip13 = new Map<string, string>();
-  const byCip7 = new Map<string, string>();
-  for (const line of cipFile.split(/\r?\n/)) {
-    const cols = line.split("\t");
-    if (cols.length < 7) continue;
-    const cis = cols[0].trim();
-    if (cols[1].trim()) byCip7.set(cols[1].trim(), cis);
-    if (cols[6].trim()) byCip13.set(cols[6].trim(), cis);
-  }
-  return { byCip13, byCip7, names, loadedAt: Date.now() };
-}
-
-async function getBdpmIndex(): Promise<BdpmIndex> {
-  if (bdpmIndex) {
-    const index = await bdpmIndex.catch(() => null);
-    if (index && Date.now() - index.loadedAt < BDPM_CACHE_MS) return index;
-  }
-  bdpmIndex = Promise.all([fetchBdpmFile("CIS_bdpm.txt"), fetchBdpmFile("CIS_CIP_bdpm.txt")])
-    .then(([cis, cip]) => parseBdpm(cis, cip));
-  bdpmIndex.catch(() => { bdpmIndex = null; });
-  return bdpmIndex;
-}
-
-// Extrait le CIP13 (3400 + 9 chiffres) ou le CIP7 d'un code scanné, y compris d'un DataMatrix GS1 (01 + 0 + CIP13)
-function isValidEan13(code: string): boolean {
-  const sum = code.slice(0, 12).split("").reduce((acc, d, i) => acc + Number(d) * (i % 2 ? 3 : 1), 0);
-  return (10 - (sum % 10)) % 10 === Number(code[12]);
-}
-
-function extractCip(code: string): { cip13?: string; cip7?: string } {
-  const digits = code.replace(/\D/g, "");
-  const cip13 = digits.match(/3400\d{9}/)?.[0];
-  if (cip13 && isValidEan13(cip13)) return { cip13 };
-  if (/^\d{7}$/.test(digits)) return { cip7: digits };
-  return {};
-}
-
-// "DOLIPRANE 1000 mg, comprimé" -> "DOLIPRANE 1000 mg"
-const shortBdpmName = (denomination: string) => denomination.split(",")[0].trim();
-
-function lookupBdpm(index: BdpmIndex, code: string): string | null {
-  const { cip13, cip7 } = extractCip(code);
-  const cis = (cip13 && index.byCip13.get(cip13)) || (cip7 && index.byCip7.get(cip7));
-  const denomination = cis ? index.names.get(cis) : undefined;
-  return denomination ? shortBdpmName(denomination) : null;
-}
-
-// Pas de repli sur l'IA : deviner un médicament à partir d'un code-barres donne des noms faux
-async function nameFromOfficialDatabase(barcode: string): Promise<string> {
-  const { cip13, cip7 } = extractCip(barcode);
-  if (!cip13 && !cip7) throw new HttpError(422, "Ce code n'est pas un code de médicament (CIP).");
-  let index: BdpmIndex;
-  try {
-    index = await getBdpmIndex();
-  } catch (err) {
-    console.error("[PharmaGuide] BDPM indisponible :", String(err).slice(0, 200));
-    throw new HttpError(503, "La base officielle des médicaments est momentanément injoignable. Réessayez ou tapez le nom.");
-  }
-  const name = lookupBdpm(index, barcode);
-  if (!name) throw new HttpError(404, "Ce code n'est pas dans la base officielle des médicaments. Tapez le nom du médicament.");
-  return name;
 }
 
 const interactionsSchema = {
@@ -339,21 +236,6 @@ Ne mentionne que des interactions réelles et documentées. Réponds UNIQUEMENT 
   });
 }
 
-async function nameFromImage(ai: GoogleGenAI, mimeType: string, data: string) {
-  return callWithFallback(async (model) => {
-    const response = await ai.models.generateContent({
-      model,
-      contents: [
-        { inlineData: { mimeType, data } },
-        "Analyse cette image de boîte de médicament ou de son code-barres/DataMatrix. Identifie le nom commercial du médicament écrit sur la boîte ou encodé dans le code (ex: Doliprane 1000mg, Spasfon, Dafalgan 1g, Advil 200mg). Réponds UNIQUEMENT avec le nom du médicament, sans explications, sans saut de ligne et sans guillemets."
-      ]
-    });
-    const name = stripQuotes(response.text || "");
-    if (!name) throw new HttpError(422, "Impossible d'identifier le médicament sur la photo.");
-    return name;
-  });
-}
-
 function requireString(value: unknown, field: string, maxLength: number, required = true): string {
   if (value === undefined || value === null || value === "") {
     if (required) throw new HttpError(400, `Champ "${field}" manquant.`);
@@ -389,13 +271,9 @@ const json = (body: unknown, status: number, headers: Record<string, string>) =>
 // Diagnostic : ouvrir /api/gemini dans le navigateur indique si la clé est présente et acceptée par Google.
 // Ne renvoie jamais la clé elle-même.
 export async function GET() {
-  const bdpm = await getBdpmIndex()
-    .then((index) => ({ ok: true, presentations: index.byCip13.size }))
-    .catch((err) => ({ ok: false, error: String((err as Error)?.message || err).slice(0, 200) }));
-
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
-    return json({ ok: false, problem: "GEMINI_API_KEY est absente pour cet environnement Vercel. Ajoutez-la puis redéployez.", bdpm }, 200, {});
+    return json({ ok: false, problem: "GEMINI_API_KEY est absente pour cet environnement Vercel. Ajoutez-la puis redéployez." }, 200, {});
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -403,12 +281,12 @@ export async function GET() {
   for (const model of CANDIDATE_MODELS) {
     try {
       await withTimeout(ai.models.generateContent({ model, contents: "ping" }), TIMEOUT_PER_MODEL_MS);
-      return json({ ok: true, model, keyLength: apiKey.length, bdpm }, 200, {});
+      return json({ ok: true, model, keyLength: apiKey.length }, 200, {});
     } catch (err) {
       errors[model] = String((err as Error)?.message || err).replaceAll(apiKey, "***").slice(0, 300);
     }
   }
-  return json({ ok: false, problem: "Google refuse toutes les requêtes avec cette clé.", keyLength: apiKey.length, errors, bdpm }, 200, {});
+  return json({ ok: false, problem: "Google refuse toutes les requêtes avec cette clé.", keyLength: apiKey.length, errors }, 200, {});
 }
 
 export function OPTIONS(request: Request) {
@@ -439,10 +317,6 @@ export async function POST(request: Request) {
         const context = requireString(body.context, "context", MAX_CONTEXT_LENGTH, false);
         return json({ data: await medicationInfo(ai, name, context) }, 200, cors);
       }
-      case "barcode": {
-        const barcode = requireString(body.barcode, "barcode", MAX_NAME_LENGTH);
-        return json({ name: await nameFromOfficialDatabase(barcode), source: "bdpm" }, 200, cors);
-      }
       case "interactions": {
         if (!Array.isArray(body.names) || body.names.length < 1 || body.names.length > MAX_INTERACTION_MEDS) {
           throw new HttpError(400, `Indiquez entre 1 et ${MAX_INTERACTION_MEDS} médicaments.`);
@@ -450,12 +324,6 @@ export async function POST(request: Request) {
         const names = body.names.map((n, i) => requireString(n, `names[${i}]`, MAX_NAME_LENGTH));
         const context = requireString(body.context, "context", MAX_CONTEXT_LENGTH, false);
         return json({ data: await checkInteractions(ai, names, context) }, 200, cors);
-      }
-      case "image": {
-        const image = requireString(body.image, "image", MAX_IMAGE_BASE64_LENGTH);
-        const match = image.match(/^data:(image\/[\w.+-]+);base64,(.+)$/);
-        if (!match) throw new HttpError(400, "Format d'image invalide.");
-        return json({ name: await nameFromImage(ai, match[1], match[2]) }, 200, cors);
       }
       default:
         throw new HttpError(400, "Action inconnue.");

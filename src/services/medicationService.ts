@@ -54,7 +54,7 @@ async function callApi<T>(payload: Record<string, unknown>): Promise<T> {
 
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(body?.error || "Une erreur est survenue lors de l'analyse. Veuillez réessayer.");
+    throw Object.assign(new Error(body?.error || "Une erreur est survenue lors de l'analyse. Veuillez réessayer."), { status: response.status });
   }
   return body as T;
 }
@@ -76,40 +76,6 @@ function sanitizeMedicationInfo(raw: any, fallbackName: string): MedicationInfo 
     usageTips: raw?.usageTips || "Respectez scrupuleusement les consignes de votre médecin ou pharmacien."
   };
 }
-
-// Réduit la photo avant envoi : les photos de téléphone dépassent souvent la taille acceptée par le serveur
-function downscaleImage(dataUrl: string, maxSide = 1280, quality = 0.85): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return resolve(dataUrl);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL("image/jpeg", quality));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
-
-// Identifie un médicament par son code CIP13 dans la base officielle (BDPM).
-// Lève une erreur avec un message lisible si le code est inconnu ou la base injoignable.
-export const identifyMedicationFromBarcode = async (cip13: string): Promise<string> => {
-  if (!navigator.onLine) throw new Error("Vous êtes hors ligne. Le scan nécessite une connexion.");
-  const { name } = await callApi<{ name: string }>({ action: "barcode", barcode: cip13 });
-  return name;
-};
-
-export const identifyMedicationFromImage = async (imageDataUrl: string): Promise<string> => {
-  if (!/^data:image\//.test(imageDataUrl)) throw new Error("Format d'image invalide");
-  const image = await downscaleImage(imageDataUrl);
-  const { name } = await callApi<{ name: string }>({ action: "image", image });
-  return name;
-};
 
 const offlineError = () =>
   new Error("Vous êtes hors ligne. Seuls les médicaments de la base locale et les fiches déjà consultées sont disponibles.");

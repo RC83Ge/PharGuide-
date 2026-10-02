@@ -13,7 +13,6 @@ import {
 import { generatePharmacyPDF } from './services/pdfExportService';
 import { downloadPharmacyText } from './services/textExportService';
 import { SearchBar } from './components/SearchBar';
-import { BarcodeScannerModal } from './components/BarcodeScannerModal';
 import { Logo } from './components/Logo';
 import { PharmacyPanel } from './components/PharmacyPanel';
 import { InfoPanel } from './components/InfoPanel';
@@ -38,7 +37,6 @@ const App: React.FC = () => {
   });
   const [showPharmacy, setShowPharmacy] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
-  const [isScannerOpen, setIsScannerOpen] = useState(false);
   
   const [userContext, setUserContext] = useState<string>(() => {
     return localStorage.getItem('pharmaguide_context') || '';
@@ -376,7 +374,6 @@ const App: React.FC = () => {
               onSearch={handleSearch} 
               isLoading={state.loading} 
               externalQuery={state.query} 
-              onOpenScanner={() => setIsScannerOpen(true)}
             />
           </div>
 
@@ -428,15 +425,6 @@ const App: React.FC = () => {
         <div className="h-safe bg-slate-50"></div>
       </div>
 
-      {/* Modal de Scan Caméra / Code-Barres */}
-      <BarcodeScannerModal
-        isOpen={isScannerOpen}
-        onClose={() => setIsScannerOpen(false)}
-        onScanSuccess={(medicationName) => {
-          setIsScannerOpen(false);
-          handleSearch(medicationName);
-        }}
-      />
     </div>
   );
 };
