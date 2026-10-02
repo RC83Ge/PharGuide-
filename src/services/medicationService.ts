@@ -54,7 +54,7 @@ async function callApi<T>(payload: Record<string, unknown>): Promise<T> {
 
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(body?.error || "Une erreur est survenue lors de l'analyse. Veuillez réessayer.");
+    throw Object.assign(new Error(body?.error || "Une erreur est survenue lors de l'analyse. Veuillez réessayer."), { status: response.status });
   }
   return body as T;
 }
@@ -96,12 +96,21 @@ function downscaleImage(dataUrl: string, maxSide = 1280, quality = 0.85): Promis
   });
 }
 
-// Identifie un médicament par son code CIP13 dans la base officielle (BDPM).
-// Lève une erreur avec un message lisible si le code est inconnu ou la base injoignable.
-export const identifyMedicationFromBarcode = async (cip13: string): Promise<string> => {
+export interface BarcodeResult {
+  name: string;
+  source: "bdpm" | "catalog"; // base officielle française, ou catalogue ouvert de produits (à confirmer)
+}
+
+// Cherche le code-barres dans la base officielle puis dans les catalogues ouverts.
+// Renvoie null si le code est inconnu ; lève une erreur si le service est injoignable.
+export const identifyMedicationFromBarcode = async (barcode: string): Promise<BarcodeResult | null> => {
   if (!navigator.onLine) throw new Error("Vous êtes hors ligne. Le scan nécessite une connexion.");
-  const { name } = await callApi<{ name: string }>({ action: "barcode", barcode: cip13 });
-  return name;
+  try {
+    return await callApi<BarcodeResult>({ action: "barcode", barcode });
+  } catch (err: any) {
+    if (err?.status === 404) return null;
+    throw err;
+  }
 };
 
 export const identifyMedicationFromImage = async (imageDataUrl: string): Promise<string> => {

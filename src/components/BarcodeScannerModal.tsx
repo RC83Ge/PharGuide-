@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { X, Camera, RefreshCw, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { identifyMedicationFromBarcode } from '../services/medicationService';
+import { X, Camera, RefreshCw, Sparkles, AlertCircle, CheckCircle2, ScanText } from 'lucide-react';
+import { identifyMedicationFromBarcode, identifyMedicationFromImage } from '../services/medicationService';
 import { extractCip13 } from '../utils/cip';
 import { toast } from 'sonner';
 
@@ -16,19 +16,37 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   onClose,
   onScanSuccess
 }) => {
-  const [scannerState, setScannerState] = useState<'idle' | 'starting' | 'scanning' | 'processing' | 'error'>('idle');
+  const [scannerState, setScannerState] = useState<'idle' | 'starting' | 'scanning' | 'processing' | 'confirm' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState<string>('Initialisation de la caméra...');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [detectedCode, setDetectedCode] = useState<string | null>(null);
+  // Nom à faire confirmer quand il ne vient pas de la base officielle
+  const [pending, setPending] = useState<{ name: string; note: string } | null>(null);
   
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const isComponentMounted = useRef<boolean>(true);
 
-  // Seuls formats utilisés sur les boîtes de médicaments : les autres provoquaient de fausses lectures
+  // Formats présents sur les boîtes de médicaments (France : EAN-13 / DataMatrix ; autres pays : EAN, UPC, Code 128)
   const formatsToSupport = [
     Html5QrcodeSupportedFormats.EAN_13,
+    Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A,
     Html5QrcodeSupportedFormats.DATA_MATRIX,
+    Html5QrcodeSupportedFormats.CODE_128,
   ];
+
+  // Image actuelle de la caméra, pour lire le nom imprimé sur la boîte si le code est inconnu
+  const captureFrame = (): string | null => {
+    const video = document.querySelector<HTMLVideoElement>('#reader-camera-view video');
+    if (!video || !video.videoWidth) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0);
+    return canvas.toDataURL('image/jpeg', 0.9);
+  };
 
   const stopScanner = async () => {
     if (html5QrCodeRef.current) {
@@ -49,23 +67,39 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   // avec la version de la fonction créée au démarrage : un état lu ici serait périmé.
   const isProcessingRef = useRef<boolean>(false);
   const lastReadRef = useRef<string | null>(null);
-  const lastInvalidNoticeRef = useRef<number>(0);
+
+  const finishWith = (name: string) => {
+    onScanSuccess(name);
+    onClose();
+  };
+
+  // Demande à l'IA de lire le nom imprimé sur la boîte, puis le fait confirmer
+  const readNameFromBox = async (frame: string | null, reason: string) => {
+    if (!frame) {
+      setPending({ name: '', note: `${reason} Tapez le nom écrit sur la boîte.` });
+      setScannerState('confirm');
+      return;
+    }
+    setScannerState('processing');
+    setStatusMessage("Lecture du nom imprimé sur la boîte...");
+    try {
+      const name = await identifyMedicationFromImage(frame);
+      if (!isComponentMounted.current) return;
+      setPending({ name, note: `${reason} Nom lu sur la boîte par l'IA : vérifiez-le avant de lancer la recherche.` });
+    } catch {
+      if (!isComponentMounted.current) return;
+      setPending({ name: '', note: `${reason} Le nom n'a pas pu être lu sur l'image. Tapez le nom écrit sur la boîte.` });
+    }
+    setScannerState('confirm');
+  };
 
   const handleBarcodeDecoded = async (decodedText: string) => {
     if (isProcessingRef.current) return;
 
-    const cip13 = extractCip13(decodedText);
-    if (!cip13) {
-      if (Date.now() - lastInvalidNoticeRef.current > 4000) {
-        lastInvalidNoticeRef.current = Date.now();
-        toast.warning("Ce code n'est pas un code de médicament. Visez le code-barres ou le DataMatrix de la boîte.");
-      }
-      return;
-    }
-
+    const code = extractCip13(decodedText) || decodedText.trim();
     // Exiger deux lectures identiques de suite pour écarter les lectures partielles
-    if (lastReadRef.current !== cip13) {
-      lastReadRef.current = cip13;
+    if (lastReadRef.current !== code) {
+      lastReadRef.current = code;
       return;
     }
 
@@ -74,30 +108,47 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       navigator.vibrate([20, 50, 20]);
     }
 
-    setDetectedCode(cip13);
+    const frame = captureFrame();
+    setDetectedCode(code);
     setScannerState('processing');
-    setStatusMessage("Recherche dans la base officielle des médicaments...");
+    setStatusMessage("Recherche du médicament...");
     await stopScanner();
 
     try {
-      const medicationName = await identifyMedicationFromBarcode(cip13);
+      const result = await identifyMedicationFromBarcode(code);
       if (!isComponentMounted.current) return;
 
-      toast.success(`Médicament identifié : ${medicationName}`, { description: "Source : base officielle des médicaments (ANSM)" });
-      onScanSuccess(medicationName);
-      onClose();
+      if (result?.source === 'bdpm') {
+        toast.success(`Médicament identifié : ${result.name}`, { description: "Source : base officielle des médicaments (ANSM)" });
+        finishWith(result.name);
+      } else if (result) {
+        setPending({ name: result.name, note: "Trouvé dans un catalogue de produits : vérifiez le nom avant de lancer la recherche." });
+        setScannerState('confirm');
+      } else {
+        await readNameFromBox(frame, "Code-barres inconnu des bases de médicaments.");
+      }
     } catch (err: any) {
       console.error("Erreur identification code-barres:", err);
       if (!isComponentMounted.current) return;
-      toast.error(err?.message || "Impossible d'identifier ce code. Tapez le nom du médicament.");
+      toast.error(err?.message || "Impossible d'identifier ce code.");
       startScanner();
     }
+  };
+
+  // Bouton manuel : lire le nom sur la boîte sans passer par le code-barres
+  const handleReadNameNow = async () => {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    const frame = captureFrame();
+    await stopScanner();
+    await readNameFromBox(frame, "");
   };
 
   const startScanner = async () => {
     await stopScanner();
     isProcessingRef.current = false;
     lastReadRef.current = null;
+    setPending(null);
     setErrorMessage(null);
     setDetectedCode(null);
     setScannerState('starting');
@@ -246,6 +297,45 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             </div>
           )}
 
+          {/* Confirmation du nom */}
+          {scannerState === 'confirm' && pending && (
+            <div className="absolute inset-0 bg-slate-950/95 flex flex-col justify-center p-6 z-20 space-y-3">
+              <h3 className="text-white font-bold text-base">Vérifiez le nom du médicament</h3>
+              {pending.note.trim() && <p className="text-slate-400 text-xs leading-relaxed">{pending.note.trim()}</p>}
+              <form
+                className="space-y-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (pending.name.trim()) finishWith(pending.name.trim());
+                }}
+              >
+                <input
+                  autoFocus
+                  value={pending.name}
+                  onChange={(e) => setPending({ ...pending, name: e.target.value })}
+                  placeholder="Nom écrit sur la boîte"
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-sm outline-none focus:border-blue-500"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={!pending.name.trim()}
+                    className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all active:scale-95"
+                  >
+                    Rechercher
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startScanner}
+                    className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold rounded-xl text-xs transition-all"
+                  >
+                    Rescanner
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
           {/* State d'erreur */}
           {scannerState === 'error' && (
             <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center z-20">
@@ -268,8 +358,17 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
         {/* Pied du scanner */}
         <div className="p-4 bg-slate-900 border-t border-slate-800 space-y-3">
+          {scannerState === 'scanning' && (
+            <button
+              onClick={handleReadNameNow}
+              className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700/80 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all"
+            >
+              <ScanText className="w-4 h-4 text-blue-400" />
+              Pas de code-barres ? Lire le nom sur la boîte
+            </button>
+          )}
           <p className="text-[11px] text-slate-500 text-center leading-snug">
-            Lit les codes CIP13, EAN-13 et DataMatrix des boîtes de médicaments.
+            Codes français vérifiés dans la base officielle. Pour les autres boîtes, le nom trouvé vous est demandé en confirmation.
           </p>
         </div>
 

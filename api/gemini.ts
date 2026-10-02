@@ -274,20 +274,60 @@ function lookupBdpm(index: BdpmIndex, code: string): string | null {
   return denomination ? shortBdpmName(denomination) : null;
 }
 
-// Pas de repli sur l'IA : deviner un médicament à partir d'un code-barres donne des noms faux
-async function nameFromOfficialDatabase(barcode: string): Promise<string> {
+// Pas de repli sur l'IA à partir des chiffres : deviner un médicament d'après un code-barres donne des noms faux.
+// Ordre : base officielle française (codes CIP), puis catalogues ouverts de produits (autres pays).
+// Si rien n'est trouvé, le client lit le nom imprimé sur la boîte (action "image") et le fait confirmer.
+
+async function nameFromOfficialDatabase(barcode: string): Promise<string | null> {
   const { cip13, cip7 } = extractCip(barcode);
-  if (!cip13 && !cip7) throw new HttpError(422, "Ce code n'est pas un code de médicament (CIP).");
-  let index: BdpmIndex;
+  if (!cip13 && !cip7) return null;
   try {
-    index = await getBdpmIndex();
+    return lookupBdpm(await getBdpmIndex(), barcode);
   } catch (err) {
     console.error("[PharmaGuide] BDPM indisponible :", String(err).slice(0, 200));
-    throw new HttpError(503, "La base officielle des médicaments est momentanément injoignable. Réessayez ou tapez le nom.");
+    return null;
   }
-  const name = lookupBdpm(index, barcode);
-  if (!name) throw new HttpError(404, "Ce code n'est pas dans la base officielle des médicaments. Tapez le nom du médicament.");
-  return name;
+}
+
+// GTIN-13 d'un code : EAN-13 direct, ou champ (01) d'un DataMatrix GS1 (14 chiffres, dont un 0 en tête)
+function extractGtin(code: string): string | null {
+  const raw = code.replace(/[^\x20-\x7E]/g, "").trim();
+  const gs1 = raw.match(/^(?:\]d2)?01(\d{14})/);
+  if (gs1) return gs1[1].replace(/^0/, "");
+  const digits = raw.replace(/\D/g, "");
+  return /^\d{8}$|^\d{12,13}$/.test(digits) && digits === raw ? digits : null;
+}
+
+const CATALOG_HOSTS = ["world.openproductsfacts.org", "world.openbeautyfacts.org", "world.openfoodfacts.org"];
+
+async function nameFromCatalog(gtin: string): Promise<string | null> {
+  const lookups = CATALOG_HOSTS.map(async (host) => {
+    const response = await withTimeout(
+      fetch(`https://${host}/api/v2/product/${gtin}.json?fields=product_name,product_name_fr,brands`, {
+        headers: { "User-Agent": "PharmaGuide/1.0 (https://pharma-swart-seven.vercel.app)" }
+      }),
+      6000
+    );
+    if (!response.ok) throw new Error(`${host}: ${response.status}`);
+    const data = await response.json();
+    const product = data?.product;
+    const name = (product?.product_name_fr || product?.product_name || "").trim();
+    if (data?.status !== 1 || !name) throw new Error(`${host}: inconnu`);
+    const brand = String(product?.brands || "").split(",")[0].trim();
+    return brand && !name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${name}` : name;
+  });
+  return Promise.any(lookups).catch(() => null);
+}
+
+async function identifyBarcode(barcode: string): Promise<{ name: string; source: "bdpm" | "catalog" }> {
+  const official = await nameFromOfficialDatabase(barcode);
+  if (official) return { name: official, source: "bdpm" };
+
+  const gtin = extractGtin(barcode);
+  const fromCatalog = gtin ? await nameFromCatalog(gtin) : null;
+  if (fromCatalog) return { name: fromCatalog, source: "catalog" };
+
+  throw new HttpError(404, "Code-barres inconnu des bases de médicaments.");
 }
 
 const interactionsSchema = {
@@ -345,11 +385,11 @@ async function nameFromImage(ai: GoogleGenAI, mimeType: string, data: string) {
       model,
       contents: [
         { inlineData: { mimeType, data } },
-        "Analyse cette image de boîte de médicament ou de son code-barres/DataMatrix. Identifie le nom commercial du médicament écrit sur la boîte ou encodé dans le code (ex: Doliprane 1000mg, Spasfon, Dafalgan 1g, Advil 200mg). Réponds UNIQUEMENT avec le nom du médicament, sans explications, sans saut de ligne et sans guillemets."
+        "Lis le nom commercial du médicament IMPRIMÉ sur cette boîte, avec son dosage s'il est visible (ex : Inderal 40 mg, Doliprane 1000 mg, Ben-u-ron 500 mg). Ne déduis jamais le nom à partir d'un code-barres. Réponds UNIQUEMENT avec le nom lu, sans explication ni guillemets. Si aucun nom de médicament n'est lisible sur l'image, réponds exactement INCONNU."
       ]
     });
     const name = stripQuotes(response.text || "");
-    if (!name) throw new HttpError(422, "Impossible d'identifier le médicament sur la photo.");
+    if (!name || /^inconnu\.?$/i.test(name)) throw new HttpError(422, "Aucun nom de médicament lisible sur l'image.");
     return name;
   });
 }
@@ -441,7 +481,7 @@ export async function POST(request: Request) {
       }
       case "barcode": {
         const barcode = requireString(body.barcode, "barcode", MAX_NAME_LENGTH);
-        return json({ name: await nameFromOfficialDatabase(barcode), source: "bdpm" }, 200, cors);
+        return json(await identifyBarcode(barcode), 200, cors);
       }
       case "interactions": {
         if (!Array.isArray(body.names) || body.names.length < 1 || body.names.length > MAX_INTERACTION_MEDS) {
