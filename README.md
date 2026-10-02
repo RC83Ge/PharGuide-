@@ -8,6 +8,7 @@ Assistant intelligent et sécurisé pour la vérification des médicaments, leur
 - **Interactions** : vérification des interactions entre tous les médicaments de la pharmacie.
 - **Hors ligne** : la pharmacie et les fiches déjà consultées restent disponibles sans connexion.
 - **Ma Pharmacie locale** : Suivi des traitements quotidiens et des médicaments **en réserve / si besoin** avec persistance IndexedDB.
+- **Journal des prises** : Noter chaque prise et voir le total sur 24 h glissantes, avec une alerte quand la dose maximale approche ou est dépassée.
 - **Bilan médical imprimable** : Génération d'un rapport PDF et TXT récapitulatif pour les consultations médicales.
 - **Profil santé personnalisé** : Prise en compte des antécédents et allergies pour alerter sur d'éventuelles contre-indications.
 
@@ -40,6 +41,7 @@ Vérifications avant de pousser :
 ```bash
 npm run lint    # vérification TypeScript
 npm run build
+npm test        # tests unitaires (node --test)
 ```
 
 ## 🌐 Déploiement sur Vercel
